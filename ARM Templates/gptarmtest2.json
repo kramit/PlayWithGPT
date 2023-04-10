@@ -1,0 +1,240 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "vmSize": {
+        "type": "string",
+        "defaultValue": "Standard_D2s_v3",
+        "metadata": {
+          "description": "Size of the virtual machines."
+        }
+      },
+      "vmUsername": {
+        "type": "string",
+        "defaultValue": "<YOUR_USERNAME>",
+        "metadata": {
+          "description": "Username for the virtual machines."
+        }
+      },
+      "vmPassword": {
+        "type": "securestring",
+        "defaultValue": "<YOUR_PASSWORD>",
+        "metadata": {
+          "description": "Password for the virtual machines."
+        }
+      }
+    },
+    "variables": {
+      "location": "[resourceGroup().location]",
+      "publicIPAddressName": "publicIP",
+      "loadBalancerName": "publicLoadBalancer",
+      "backendAddressPoolName": "backendPool",
+      "networkInterfaceName": "nic",
+      "virtualNetworkName": "virtualNetwork",
+      "subnetName": "subnet",
+      "gitRepoURL": "https://github.com/kramit/CoffeeShopTemplate.git",
+      "vmScript": "install-nginx.sh"
+    },
+    "resources": [
+      {
+        "type": "Microsoft.Network/publicIPAddresses",
+        "apiVersion": "2020-11-01",
+        "name": "[variables('publicIPAddressName')]",
+        "location": "[variables('location')]",
+        "properties": {
+          "publicIPAllocationMethod": "Dynamic"
+        }
+      },
+      {
+        "type": "Microsoft.Network/loadBalancers",
+        "apiVersion": "2020-11-01",
+        "name": "[variables('loadBalancerName')]",
+        "location": "[variables('location')]",
+        "dependsOn": [
+          "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]"
+        ],
+        "properties": {
+          "frontendIPConfigurations": [
+            {
+              "name": "LoadBalancerFrontend",
+              "properties": {
+                "publicIPAddress": {
+                  "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName'))]"
+                }
+              }
+            }
+          ],
+          "backendAddressPools": [
+            {
+              "name": "[variables('backendAddressPoolName')]"
+            }
+          ],
+          "loadBalancingRules": [
+            {
+              "name": "LoadBalancerRule",
+              "properties": {
+                "frontendIPConfiguration": {
+                  "id": "[resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', variables('loadBalancerName'), 'LoadBalancerFrontend')]"
+                },
+                "backendAddressPool": {
+                  "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('loadBalancerName'), variables('backendAddressPoolName'))]"
+                },
+                "protocol": "Tcp",
+                "frontendPort": 80,
+                "backendPort": 80,
+                "probe": {
+                  "id": "[resourceId('Microsoft.Network/loadBalancers/probes', variables('loadBalancerName'), 'httpProbe')]"
+                }
+              }
+              }
+          }
+        ],
+        "probes": [
+          {
+            "name": "httpProbe",
+            "properties": {
+              "protocol": "Http",
+              "port": 80,
+              "requestPath": "/",
+              "intervalInSeconds": 5,
+              "numberOfProbes": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2020-11-01",
+      "name": "[variables('virtualNetworkName')]",
+      "location": "[variables('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "10.0.0.0/16"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "10.0.1.0/24"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2020-12-01",
+      "name": "[concat('vm', copyIndex(1))]",
+      "location": "[variables('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
+      ],
+      "copy": {
+        "name": "vmCopy",
+        "count": 3
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat('vm', copyIndex(1))]",
+          "adminUsername": "[parameters('vmUsername')]",
+          "adminPassword": "[parameters('vmPassword')]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": false
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "UbuntuServer",
+            "sku": "18.04-LTS",
+            "version": "latest"
+          },
+          "osDisk": {
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('networkInterfaceName'), copyIndex(1)))]"
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2020-11-01",
+      "name": "[concat(variables('networkInterfaceName'), copyIndex(1))]",
+      "location": "[variables('location')]",
+      "copy": {
+        "name": "nicCopy",
+        "count": 3
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/loadBalancers', variables('loadBalancerName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('virtualNetworkName'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('virtualNetworkName'), variables('subnetName'))]"
+              },
+              "loadBalancerBackendAddressPools": [
+                {
+
+              "id": "[resourceId('Microsoft.Network/loadBalancers/backendAddressPools', variables('loadBalancerName'), variables('backendAddressPoolName'))]"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2020-12-01",
+      "name": "[concat('vm', copyIndex(1), '/installnginx')]",
+      "location": "[variables('location')]",
+      "copy": {
+        "name": "extensionCopy",
+        "count": 3
+      },
+      "dependsOn": [
+        "vmCopy"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.0",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "fileUris": [
+            "https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/samples/201-2-vms-loadbalancer-natrules/install-nginx.sh"
+          ],
+          "commandToExecute": "[concat('sh install-nginx.sh ', variables('gitRepoURL'))]"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "publicIP": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPAddressName')), '2020-11-01').ipAddress]"
+    }
+  }
+}
